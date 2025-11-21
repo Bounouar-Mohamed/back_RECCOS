@@ -1,0 +1,597 @@
+import {
+  Injectable,
+  UnauthorizedException,
+  ConflictException,
+  BadRequestException,
+} from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
+import * as bcrypt from 'bcrypt';
+import { UsersService } from '../users/users.service';
+import { LoginDto } from './dto/login.dto';
+import { RegisterDto } from './dto/register.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
+import { JwtPayload } from '../../common/interfaces/jwt-payload.interface';
+import { EmailService } from '../../common/services/email.service';
+import { randomBytes, timingSafeEqual, createHash } from 'crypto';
+import * as speakeasy from 'speakeasy';
+import * as QRCode from 'qrcode';
+import { Logger } from '@nestjs/common';
+
+@Injectable()
+export class AuthService {
+  constructor(
+    private usersService: UsersService,
+    private jwtService: JwtService,
+    private configService: ConfigService,
+    private emailService: EmailService,
+  ) {}
+
+  async validateUser(email: string, password: string): Promise<any> {
+    const user = await this.usersService.findByEmail(email);
+    if (!user) {
+      return null;
+    }
+
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      return null;
+    }
+
+    const { password: _, ...result } = user;
+    return result;
+  }
+
+  async login(loginDto: LoginDto) {
+    const user = await this.validateUser(loginDto.email, loginDto.password);
+    if (!user) {
+      throw new UnauthorizedException('Invalid credentials');
+    }
+
+    if (!user.emailVerified) {
+      throw new UnauthorizedException('Email not verified');
+    }
+    if (!user.isActive) {
+      throw new UnauthorizedException('Account is not active');
+    }
+
+    // Si 2FA est activée, vérifier le code
+    if (user.twoFactorEnabled) {
+      if (!(loginDto as any).twoFactorCode) {
+        throw new UnauthorizedException('2FA code required');
+      }
+
+      const isValid = await this.verify2FACode(user, (loginDto as any).twoFactorCode);
+      if (!isValid) {
+        throw new UnauthorizedException('Invalid 2FA code');
+      }
+    }
+
+    await this.usersService.updateLastLogin(user.id);
+
+    const payload: JwtPayload = {
+      sub: user.id,
+      email: user.email,
+      role: user.role,
+    };
+
+    return {
+      access_token: this.jwtService.sign(payload),
+      user: {
+        id: user.id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        role: user.role,
+      },
+    };
+  }
+
+  /**
+   * Générer un JWT token (méthode publique pour les stratégies OAuth)
+   */
+  generateToken(payload: JwtPayload): string {
+    return this.jwtService.sign(payload);
+  }
+
+  async register(registerDto: RegisterDto) {
+    const existingUser = await this.usersService.findByEmail(
+      registerDto.email,
+    );
+    if (existingUser) {
+      throw new ConflictException('User with this email already exists');
+    }
+    const existingUsername = await this.usersService.findByUsername(
+      registerDto.username,
+    );
+    if (existingUsername) {
+      throw new ConflictException('Username already taken');
+    }
+
+    const saltRounds = this.configService.get('bcrypt.saltRounds');
+    const hashedPassword = await bcrypt.hash(registerDto.password, saltRounds);
+
+    const emailVerificationToken = randomBytes(32).toString('hex');
+    const tokenTtlHours = 24;
+    const expiresAt = new Date(Date.now() + tokenTtlHours * 60 * 60 * 1000);
+
+    const user = await this.usersService.create({
+      email: registerDto.email,
+      password: hashedPassword,
+      firstName: registerDto.firstName,
+      lastName: registerDto.lastName,
+      username: registerDto.username,
+      dateOfBirth: registerDto.dateOfBirth ? new Date(registerDto.dateOfBirth) : null,
+      country: registerDto.country,
+      isActive: false,
+      emailVerified: false,
+      emailVerificationToken,
+      emailVerificationTokenExpiresAt: expiresAt,
+    });
+
+    await this.sendEmailVerification(user.email, emailVerificationToken);
+
+    const { password: _, ...result } = user;
+    return result;
+  }
+
+  private async sendEmailVerification(email: string, token: string) {
+    try {
+      const appUrl = this.configService.get<string>('app.url') || '';
+      const verifyUrl = `${appUrl.replace(/\/+$/, '')}/api/auth/verify-email?token=${token}`;
+      const subject = 'Verify your email';
+      const html = `
+      <p>Bienvenue !</p>
+      <p>Veuillez confirmer votre adresse e‑mail en cliquant sur le lien suivant :</p>
+      <p><a href="${verifyUrl}">Activer mon compte</a></p>
+      <p>Ce lien expire dans 24 heures.</p>
+    `;
+      await this.emailService.sendMail(email, subject, html);
+    } catch (error) {
+      // L'erreur est déjà loggée dans EmailService, on continue quand même
+      // L'utilisateur peut toujours utiliser le lien de vérification
+    }
+  }
+
+  async verifyEmail(token: string) {
+    if (!token) {
+      throw new BadRequestException('Token is required');
+    }
+    const userByToken = await this.usersService.findByEmailVerificationToken(token);
+    if (!userByToken) {
+      throw new BadRequestException('Invalid token');
+    }
+    if (
+      !userByToken.emailVerificationTokenExpiresAt ||
+      userByToken.emailVerificationTokenExpiresAt.getTime() < Date.now()
+    ) {
+      throw new BadRequestException('Token expired');
+    }
+    userByToken.emailVerified = true;
+    userByToken.isActive = true;
+    userByToken.emailVerificationToken = null;
+    userByToken.emailVerificationTokenExpiresAt = null;
+    await this.usersService.save(userByToken);
+    return { message: 'Email verified successfully' };
+  }
+
+  async resendVerification(email: string) {
+    const user = await this.usersService.findByEmail(email);
+    if (!user) {
+      // Do not reveal user existence
+      return { message: 'If an account exists, a verification email was sent' };
+    }
+    if (user.emailVerified) {
+      return { message: 'Email already verified' };
+    }
+    const emailVerificationToken = randomBytes(32).toString('hex');
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    user.emailVerificationToken = emailVerificationToken;
+    user.emailVerificationTokenExpiresAt = expiresAt;
+    await this.usersService.save(user);
+    await this.sendEmailVerification(user.email, emailVerificationToken);
+    return { message: 'Verification email resent' };
+  }
+
+  /**
+   * Demander la réinitialisation du mot de passe
+   */
+  async forgotPassword(forgotPasswordDto: ForgotPasswordDto) {
+    const user = await this.usersService.findByEmail(forgotPasswordDto.email);
+    if (!user) {
+      // Ne pas révéler l'existence de l'utilisateur
+      return { message: 'If an account exists, a password reset email was sent' };
+    }
+
+    // Générer un token de réinitialisation
+    const resetToken = randomBytes(32).toString('hex');
+    const tokenTtlHours = 1; // Token valide 1 heure
+    const expiresAt = new Date(Date.now() + tokenTtlHours * 60 * 60 * 1000);
+
+    // Sauvegarder le token
+    user.passwordResetToken = resetToken;
+    user.passwordResetTokenExpiresAt = expiresAt;
+    await this.usersService.save(user);
+
+    // Envoyer l'email
+    await this.sendPasswordResetEmail(user.email, resetToken);
+
+    return { message: 'If an account exists, a password reset email was sent' };
+  }
+
+  /**
+   * Réinitialiser le mot de passe avec un token
+   */
+  async resetPassword(resetPasswordDto: ResetPasswordDto) {
+    if (!resetPasswordDto.token) {
+      throw new BadRequestException('Token is required');
+    }
+
+    // Trouver l'utilisateur par token
+    const user = await this.usersService.findByPasswordResetToken(
+      resetPasswordDto.token,
+    );
+
+    if (!user) {
+      throw new BadRequestException('Invalid or expired token');
+    }
+
+    // Vérifier l'expiration
+    if (
+      !user.passwordResetTokenExpiresAt ||
+      user.passwordResetTokenExpiresAt.getTime() < Date.now()
+    ) {
+      throw new BadRequestException('Token expired');
+    }
+
+    // Hasher le nouveau mot de passe
+    const saltRounds = this.configService.get('bcrypt.saltRounds');
+    const hashedPassword = await bcrypt.hash(
+      resetPasswordDto.newPassword,
+      saltRounds,
+    );
+
+    // Mettre à jour le mot de passe et supprimer le token
+    user.password = hashedPassword;
+    user.passwordResetToken = null;
+    user.passwordResetTokenExpiresAt = null;
+    await this.usersService.save(user);
+
+    return { message: 'Password reset successfully' };
+  }
+
+  /**
+   * Envoyer l'email de réinitialisation du mot de passe
+   */
+  private async sendPasswordResetEmail(email: string, token: string) {
+    try {
+      const appUrl = this.configService.get<string>('app.url') || '';
+      // L'URL doit pointer vers le frontend qui appellera ensuite l'API
+      // Exemple: https://app.example.com/reset-password?token=...
+      const resetUrl = `${appUrl.replace(/\/+$/, '')}/reset-password?token=${token}`;
+      const subject = 'Réinitialisation de votre mot de passe';
+      const html = `
+        <p>Bonjour,</p>
+        <p>Vous avez demandé la réinitialisation de votre mot de passe.</p>
+        <p>Cliquez sur le lien suivant pour définir un nouveau mot de passe :</p>
+        <p><a href="${resetUrl}">Réinitialiser mon mot de passe</a></p>
+        <p>Ce lien expire dans 1 heure.</p>
+        <p>Si vous n'avez pas demandé cette réinitialisation, ignorez cet email.</p>
+      `;
+      await this.emailService.sendMail(email, subject, html);
+    } catch (error) {
+      // L'erreur est déjà loggée dans EmailService
+    }
+  }
+
+  /**
+   * Valider ou créer un utilisateur depuis UAE Pass
+   */
+  async validateOrCreateUaePassUser(uaePassUserInfo: any) {
+    const uaePassId = uaePassUserInfo.sub || uaePassUserInfo.id;
+    const email = uaePassUserInfo.email;
+
+    if (!uaePassId || !email) {
+      throw new BadRequestException('Invalid UAE Pass user info');
+    }
+
+    // Chercher un utilisateur existant par UAE Pass ID
+    let user = await this.usersService.findByUaePassId(uaePassId);
+
+    if (user) {
+      // Utilisateur existe déjà, mettre à jour lastLogin
+      await this.usersService.updateLastLogin(user.id);
+      return user;
+    }
+
+    // Chercher par email
+    user = await this.usersService.findByEmail(email);
+
+    if (user) {
+      // Lier UAE Pass à l'utilisateur existant
+      user.uaePassId = uaePassId;
+      await this.usersService.save(user);
+      await this.usersService.updateLastLogin(user.id);
+      return user;
+    }
+
+    // Créer un nouvel utilisateur
+    // Générer un username unique à partir de l'email
+    const baseUsername = email.split('@')[0];
+    let username = baseUsername;
+    let counter = 1;
+    while (await this.usersService.findByUsername(username)) {
+      username = `${baseUsername}${counter}`;
+      counter++;
+    }
+
+    // Générer un mot de passe aléatoire (l'utilisateur pourra le changer)
+    const randomPassword = randomBytes(32).toString('hex');
+    const saltRounds = this.configService.get('bcrypt.saltRounds');
+    const hashedPassword = await bcrypt.hash(randomPassword, saltRounds);
+
+    user = await this.usersService.create({
+      email,
+      password: hashedPassword,
+      username,
+      firstName: uaePassUserInfo.given_name || uaePassUserInfo.firstName || null,
+      lastName: uaePassUserInfo.family_name || uaePassUserInfo.lastName || null,
+      uaePassId,
+      emailVerified: true, // UAE Pass vérifie déjà l'email
+      isActive: true,
+    });
+
+    // Mettre à jour lastLogin
+    await this.usersService.updateLastLogin(user.id);
+
+    return user;
+  }
+
+  /**
+   * Valider ou créer un utilisateur depuis OAuth (Google, Facebook, Apple)
+   */
+  async validateOrCreateOAuthUser(oauthData: {
+    provider: 'google' | 'facebook' | 'apple';
+    providerId: string;
+    email: string;
+    firstName?: string | null;
+    lastName?: string | null;
+  }) {
+    const { provider, providerId, email, firstName, lastName } = oauthData;
+
+    if (!providerId || !email) {
+      throw new BadRequestException(`Invalid ${provider} user info`);
+    }
+
+    // Chercher un utilisateur existant par provider ID
+    let user: any = null;
+    if (provider === 'google') {
+      user = await this.usersService.findByGoogleId(providerId);
+    } else if (provider === 'facebook') {
+      user = await this.usersService.findByFacebookId(providerId);
+    } else if (provider === 'apple') {
+      user = await this.usersService.findByAppleId(providerId);
+    }
+
+    if (user) {
+      // Utilisateur existe déjà, mettre à jour lastLogin
+      await this.usersService.updateLastLogin(user.id);
+      return user;
+    }
+
+    // Chercher par email
+    user = await this.usersService.findByEmail(email);
+
+    if (user) {
+      // Lier le provider OAuth à l'utilisateur existant
+      if (provider === 'google') {
+        user.googleId = providerId;
+      } else if (provider === 'facebook') {
+        user.facebookId = providerId;
+      } else if (provider === 'apple') {
+        user.appleId = providerId;
+      }
+      await this.usersService.save(user);
+      await this.usersService.updateLastLogin(user.id);
+      return user;
+    }
+
+    // Créer un nouvel utilisateur
+    const baseUsername = email.split('@')[0];
+    let username = baseUsername;
+    let counter = 1;
+    while (await this.usersService.findByUsername(username)) {
+      username = `${baseUsername}${counter}`;
+      counter++;
+    }
+
+    // Générer un mot de passe aléatoire
+    const randomPassword = randomBytes(32).toString('hex');
+    const saltRounds = this.configService.get('bcrypt.saltRounds');
+    const hashedPassword = await bcrypt.hash(randomPassword, saltRounds);
+
+    const userData: any = {
+      email,
+      password: hashedPassword,
+      username,
+      firstName: firstName || null,
+      lastName: lastName || null,
+      emailVerified: true, // OAuth providers vérifient déjà l'email
+      isActive: true,
+    };
+
+    // Assigner l'ID du provider OAuth
+    if (provider === 'google') {
+      userData.googleId = providerId;
+    } else if (provider === 'facebook') {
+      userData.facebookId = providerId;
+    } else if (provider === 'apple') {
+      userData.appleId = providerId;
+    }
+
+    user = await this.usersService.create(userData);
+    await this.usersService.updateLastLogin(user.id);
+
+    return user;
+  }
+
+  async enable2FA(userId: string, method: string, phoneNumber?: string) {
+    const user = await this.usersService.findOne(userId);
+
+    if (user.twoFactorEnabled) {
+      throw new BadRequestException('2FA is already enabled');
+    }
+
+    // ⚠️ AVERTISSEMENT SÉCURITÉ : Décourager SMS à cause du SIM swapping
+    if (method === 'sms') {
+      if (!phoneNumber) {
+        throw new BadRequestException('Phone number is required for SMS 2FA');
+      }
+      // Avertir l'utilisateur des risques
+      this.logger.warn(`User ${user.email} attempting to enable SMS 2FA (vulnerable to SIM swapping)`);
+    }
+
+    let secret: string | null = null;
+    let qrCodeUrl: string | null = null;
+
+    if (method === 'app') {
+      const secretObj = speakeasy.generateSecret({
+        name: `FRAQTAL (${user.email})`,
+        length: 32,
+      });
+      secret = secretObj.base32 || '';
+
+      const otpauthUrl = speakeasy.otpauthURL({
+        secret: secret,
+        label: user.email,
+        issuer: 'FRAQTAL',
+        encoding: 'base32',
+      });
+
+      qrCodeUrl = await QRCode.toDataURL(otpauthUrl);
+    } else if (method === 'sms' || method === 'email') {
+      // Générer un code temporaire pour SMS/Email
+      const tempCode = Math.floor(100000 + Math.random() * 900000).toString(); // 6 chiffres
+      const codeHash = createHash('sha256').update(tempCode).digest('hex');
+      const expiresAt = new Date(Date.now() + this.TWO_FA_CODE_EXPIRY_MINUTES * 60 * 1000);
+
+      user.twoFactorTempCode = codeHash;
+      user.twoFactorTempCodeExpiresAt = expiresAt;
+
+      // Envoyer le code
+      if (method === 'sms') {
+        // TODO: Implémenter l'envoi SMS via un service (Twilio, AWS SNS, etc.)
+        this.logger.log(`2FA SMS code generated for ${user.email}: ${tempCode} (expires in ${this.TWO_FA_CODE_EXPIRY_MINUTES} minutes)`);
+        // En production, envoyer via SMS service
+      } else if (method === 'email') {
+        await this.send2FAEmailCode(user.email, tempCode);
+      }
+    }
+
+    user.twoFactorMethod = method;
+    user.twoFactorSecret = secret;
+    if (phoneNumber) {
+      user.phoneNumber = phoneNumber;
+      user.phoneVerified = false;
+    }
+
+    await this.usersService.save(user);
+
+    return {
+      method,
+      secret: method === 'app' ? secret : null,
+      qrCodeUrl: method === 'app' ? qrCodeUrl : null,
+      phoneNumber: method === 'sms' ? phoneNumber : null,
+      warning: method === 'sms' ? 'SMS 2FA is vulnerable to SIM swapping attacks. We strongly recommend using TOTP (app) instead.' : null,
+      message: method === 'sms' ? 'SMS verification code sent' : method === 'email' ? 'Email verification code sent' : 'Please verify the code to complete 2FA setup',
+    };
+  }
+
+  /**
+   * Envoyer un code 2FA par email
+   */
+  private async send2FAEmailCode(email: string, code: string) {
+    try {
+      const subject = 'Your 2FA verification code';
+      const html = `
+        <p>Your 2FA verification code is: <strong>${code}</strong></p>
+        <p>This code expires in ${this.TWO_FA_CODE_EXPIRY_MINUTES} minutes.</p>
+        <p>If you did not request this code, please ignore this email.</p>
+      `;
+      await this.emailService.sendMail(email, subject, html);
+    } catch (error) {
+      this.logger.error(`Failed to send 2FA email code to ${email}:`, error);
+    }
+  }
+
+  async disable2FA(userId: string) {
+    const user = await this.usersService.findOne(userId);
+
+    if (!user.twoFactorEnabled) {
+      throw new BadRequestException('2FA is not enabled');
+    }
+
+    user.twoFactorEnabled = false;
+    user.twoFactorSecret = null;
+    user.twoFactorMethod = null;
+
+    await this.usersService.save(user);
+
+    return { message: '2FA disabled successfully' };
+  }
+
+  async verify2FACode(user: any, code: string): Promise<boolean> {
+    if (!user.twoFactorEnabled || !user.twoFactorMethod) {
+      return false;
+    }
+
+    if (user.twoFactorMethod === 'app') {
+      if (!user.twoFactorSecret) {
+        return false;
+      }
+
+      return speakeasy.totp.verify({
+        secret: user.twoFactorSecret,
+        encoding: 'base32',
+        token: code,
+        window: 2,
+      });
+    } else if (user.twoFactorMethod === 'sms') {
+      return true; // TODO: Implémenter SMS
+    } else if (user.twoFactorMethod === 'email') {
+      return true; // TODO: Implémenter email
+    }
+
+    return false;
+  }
+
+  async verifyAndEnable2FA(userId: string, code: string) {
+    const user = await this.usersService.findOne(userId);
+
+    if (user.twoFactorEnabled) {
+      throw new BadRequestException('2FA is already enabled');
+    }
+
+    if (!user.twoFactorSecret) {
+      throw new BadRequestException('2FA secret not found. Please enable 2FA first.');
+    }
+
+    const isValid = speakeasy.totp.verify({
+      secret: user.twoFactorSecret,
+      encoding: 'base32',
+      token: code,
+      window: 2,
+    });
+
+    if (!isValid) {
+      throw new BadRequestException('Invalid 2FA code');
+    }
+
+    user.twoFactorEnabled = true;
+    user.twoFactorMethod = 'app';
+    await this.usersService.save(user);
+
+    return { message: '2FA enabled successfully' };
+  }
+}
