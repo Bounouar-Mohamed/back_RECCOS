@@ -20,6 +20,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/guards/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { Public } from '../../common/decorators/public.decorator';
 import { UserRole } from '../../common/enums/user-role.enum';
 import {
   ApiTags,
@@ -35,14 +36,25 @@ export class PropertiesController {
   constructor(private readonly propertiesService: PropertiesService) {}
 
   /**
-   * Créer une nouvelle annonce (DEVELOPER ou ADMIN)
+   * Lister les annonces publiques pour le site (sans authentification)
+   */
+  @Get('public')
+  @Public()
+  @ApiOperation({ summary: 'List published properties for public landing pages' })
+  @ApiResponse({ status: 200, description: 'Public properties retrieved successfully' })
+  async findAllPublic(@Query() filters: FilterPropertyDto) {
+    return this.propertiesService.findAll(filters, UserRole.CLIENT);
+  }
+
+  /**
+   * Créer une nouvelle annonce (ADMIN ou SUPERADMIN)
    */
   @Post()
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.DEVELOPER, UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.SUPERADMIN)
   @HttpCode(HttpStatus.CREATED)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Create a new property listing (DEVELOPER or ADMIN)' })
+  @ApiOperation({ summary: 'Create a new property listing (ADMIN or SUPERADMIN)' })
   @ApiResponse({ status: 201, description: 'Property created successfully' })
   @ApiResponse({ status: 403, description: 'Forbidden - Only developers or admins can create properties' })
   async create(
@@ -55,8 +67,8 @@ export class PropertiesController {
   /**
    * Lister les annonces avec filtres
    * - CLIENT : voit uniquement les PUBLISHED
-   * - DEVELOPER : voit ses propres annonces
-   * - ADMIN : voit toutes les annonces
+   * - ADMIN : voit ses propres annonces
+   * - SUPERADMIN : voit toutes les annonces
    */
   @Get()
   @UseGuards(JwtAuthGuard)
@@ -86,12 +98,12 @@ export class PropertiesController {
 
   /**
    * Mettre à jour une annonce
-   * - DEVELOPER : peut modifier ses propres annonces (DRAFT, PENDING, REJECTED)
-   * - ADMIN : peut modifier toutes les annonces
+   * - ADMIN : peut modifier ses propres annonces (DRAFT, PENDING, REJECTED)
+   * - SUPERADMIN : peut modifier toutes les annonces
    */
   @Patch(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.DEVELOPER, UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.SUPERADMIN)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Update a property' })
   @ApiResponse({ status: 200, description: 'Property updated successfully' })
@@ -109,10 +121,10 @@ export class PropertiesController {
    */
   @Post(':id/publish')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.SUPERADMIN)
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Publish a property (ADMIN only)' })
+  @ApiOperation({ summary: 'Publish a property (ADMIN or SUPERADMIN)' })
   @ApiResponse({ status: 200, description: 'Property published successfully' })
   @ApiResponse({ status: 403, description: 'Forbidden - Only admins can publish' })
   async publish(
@@ -128,10 +140,10 @@ export class PropertiesController {
    */
   @Post(':id/reject')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.SUPERADMIN)
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Reject a property (ADMIN only)' })
+  @ApiOperation({ summary: 'Reject a property (ADMIN or SUPERADMIN)' })
   @ApiResponse({ status: 200, description: 'Property rejected successfully' })
   @ApiResponse({ status: 403, description: 'Forbidden - Only admins can reject' })
   async reject(
@@ -147,7 +159,7 @@ export class PropertiesController {
    */
   @Delete(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.DEVELOPER, UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.SUPERADMIN)
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Delete a property' })
@@ -162,9 +174,9 @@ export class PropertiesController {
    */
   @Get('admin/stats')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.SUPERADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get property statistics (ADMIN only)' })
+  @ApiOperation({ summary: 'Get property statistics (ADMIN or SUPERADMIN)' })
   @ApiResponse({ status: 200, description: 'Statistics retrieved successfully' })
   async getStats() {
     return this.propertiesService.getStats();

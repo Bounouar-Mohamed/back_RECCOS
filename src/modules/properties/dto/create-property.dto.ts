@@ -10,7 +10,49 @@ import {
   Max,
   ValidateNested,
   IsObject,
+  IsDateString,
+  Matches,
+  ValidatorConstraint,
+  ValidatorConstraintInterface,
+  ValidationArguments,
+  Validate,
+  registerDecorator,
+  ValidationOptions,
+  IsUUID,
 } from 'class-validator';
+
+// Custom validator for URLs or data URLs (base64)
+@ValidatorConstraint({ name: 'isUrlOrDataUrl', async: false })
+class IsUrlOrDataUrlConstraint implements ValidatorConstraintInterface {
+  validate(value: string, args: ValidationArguments) {
+    if (!value || typeof value !== 'string') return false;
+    // Accept data URLs (base64)
+    if (value.startsWith('data:')) return true;
+    // Accept standard URLs
+    try {
+      new URL(value);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  defaultMessage(args: ValidationArguments) {
+    return 'Each value must be a valid URL or data URL';
+  }
+}
+
+function IsUrlOrDataUrl(validationOptions?: ValidationOptions) {
+  return function (object: Object, propertyName: string) {
+    registerDecorator({
+      target: object.constructor,
+      propertyName: propertyName,
+      options: validationOptions,
+      constraints: [],
+      validator: IsUrlOrDataUrlConstraint,
+    });
+  };
+}
 import { Type } from 'class-transformer';
 import { PropertyType, Emirates, PropertyStatus } from '../../../database/entities/property.entity';
 
@@ -85,11 +127,13 @@ export class CreatePropertyDto {
   features?: string[];
 
   @IsArray()
-  @IsUrl({}, { each: true })
+  @IsString({ each: true })
+  @Validate(IsUrlOrDataUrlConstraint, { each: true })
   @IsOptional()
   images?: string[];
 
-  @IsUrl()
+  @IsString()
+  @IsUrlOrDataUrl()
   @IsOptional()
   mainImage?: string;
 
@@ -107,6 +151,10 @@ export class CreatePropertyDto {
   @IsString()
   @IsOptional()
   developerId?: string; // Pour ADMIN qui crée pour un DEVELOPER
+
+  @IsUUID()
+  @IsOptional()
+  brandDeveloperId?: string;
 
   @IsEnum(PropertyStatus)
   @IsOptional()
@@ -308,5 +356,8 @@ export class CreatePropertyDto {
   @IsString()
   @IsOptional()
   listingType?: string; // Sale, Rent, Both
+
+  @IsOptional()
+  availableAt?: string | null; // Date ISO d'ouverture des ventes (peut être null pour supprimer)
 }
 

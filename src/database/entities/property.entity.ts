@@ -1,6 +1,7 @@
 import { Entity, Column, ManyToOne, JoinColumn, OneToMany, Index } from 'typeorm';
 import { BaseEntity } from './base.entity';
 import { User } from './user.entity';
+import { DeveloperBrand } from './developer-brand.entity';
 
 /**
  * Statut d'une annonce immobilière
@@ -8,6 +9,7 @@ import { User } from './user.entity';
 export enum PropertyStatus {
   DRAFT = 'draft',           // Brouillon (créé par DEVELOPER)
   PENDING = 'pending',      // En attente de validation (ADMIN)
+  UPCOMING = 'upcoming',    // Publiée mais pas encore investissable (countdown)
   PUBLISHED = 'published',  // Publiée et visible (CLIENT)
   SOLD = 'sold',            // Vendue (tous les tokens achetés)
   REJECTED = 'rejected',    // Rejetée par l'admin
@@ -55,6 +57,16 @@ export class Property extends BaseEntity {
 
   @Column({ type: 'uuid' })
   developerId: string;
+
+  /**
+   * Constructeur / marque associée
+   */
+  @ManyToOne(() => DeveloperBrand, { nullable: true })
+  @JoinColumn({ name: 'brandDeveloperId' })
+  brandDeveloper: DeveloperBrand;
+
+  @Column({ type: 'uuid', nullable: true })
+  brandDeveloperId: string | null;
 
   /**
    * Titre de l'annonce
@@ -167,9 +179,9 @@ export class Property extends BaseEntity {
   images: string[];
 
   /**
-   * Image principale (URL)
+   * Image principale (URL ou data URL)
    */
-  @Column({ type: 'varchar', length: 500, nullable: true })
+  @Column({ type: 'text', nullable: true })
   mainImage: string;
 
   /**
@@ -464,6 +476,12 @@ export class Property extends BaseEntity {
    */
   @Column({ type: 'varchar', length: 50, nullable: true })
   availabilityStatus: string;
+
+  /**
+   * Date/heure d'ouverture des ventes (compte à rebours côté client)
+   */
+  @Column({ type: 'timestamp', nullable: true })
+  availableAt: Date;
 
   /**
    * Type d'annonce (Sale, Rent, Both)

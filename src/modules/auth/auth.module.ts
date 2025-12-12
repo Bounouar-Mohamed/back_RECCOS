@@ -39,6 +39,6 @@ import { EmailService } from '../../common/services/email.service';
     AppleStrategy,
     EmailService,
   ],
-  exports: [AuthService],
+  exports: [AuthService, EmailService],
 })
 export class AuthModule {}

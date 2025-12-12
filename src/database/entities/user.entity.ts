@@ -5,6 +5,7 @@ import { UserRole, DEFAULT_USER_ROLE } from '../../common/enums/user-role.enum';
 @Entity('users')
 @Index(['email'], { unique: true })
 @Index(['username'], { unique: true })
+@Index('IDX_users_refresh_token_hash', ['refreshTokenHash'])
 export class User extends BaseEntity {
   @Column({ type: 'varchar', length: 255 })
   email: string;
@@ -168,4 +169,22 @@ export class User extends BaseEntity {
    */
   @Column({ type: 'timestamp', nullable: true })
   otpExpiresAt: Date | null;
+
+  /**
+   * Hash du refresh token courant
+   */
+  @Column({ type: 'varchar', length: 512, nullable: true })
+  refreshTokenHash: string | null;
+
+  /**
+   * Expiration du refresh token
+   */
+  @Column({ type: 'timestamp', nullable: true })
+  refreshTokenExpiresAt: Date | null;
+
+  /**
+   * Dernier heartbeat reçu, utilisé pour maintenir la session ouverte
+   */
+  @Column({ type: 'timestamp', nullable: true })
+  lastHeartbeatAt: Date | null;
 }

@@ -67,6 +67,34 @@ export class UsersService {
     });
   }
 
+  async updateHeartbeat(id: string): Promise<void> {
+    await this.usersRepository.update(id, {
+      lastHeartbeatAt: new Date(),
+    });
+  }
+
+  async setRefreshToken(id: string, refreshTokenHash: string, expiresAt: Date): Promise<void> {
+    await this.usersRepository.update(id, {
+      refreshTokenHash,
+      refreshTokenExpiresAt: expiresAt,
+      lastHeartbeatAt: new Date(),
+    });
+  }
+
+  async clearRefreshToken(id: string): Promise<void> {
+    await this.usersRepository.update(id, {
+      refreshTokenHash: null,
+      refreshTokenExpiresAt: null,
+      lastHeartbeatAt: null,
+    });
+  }
+
+  async findByRefreshTokenHash(hash: string): Promise<User | null> {
+    return this.usersRepository.findOne({
+      where: { refreshTokenHash: hash, deletedAt: null },
+    });
+  }
+
   async findByEmailVerificationToken(token: string): Promise<User | null> {
     return this.usersRepository.findOne({
       where: { emailVerificationToken: token },

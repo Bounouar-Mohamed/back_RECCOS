@@ -19,6 +19,7 @@ export default () => ({
   jwt: {
     secret: process.env.JWT_SECRET || 'your-secret-key-change-in-production',
     expiresIn: process.env.JWT_EXPIRES_IN || '24h',
+    refreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '30d',
   },
   bcrypt: {
     saltRounds: parseInt(process.env.BCRYPT_SALT_ROUNDS, 10) || 10,
@@ -82,5 +83,17 @@ export default () => ({
     keyID: process.env.APPLE_KEY_ID || '',
     privateKey: process.env.APPLE_PRIVATE_KEY || '',
     callbackURL: process.env.APPLE_CALLBACK_URL || 'http://localhost:3000/api/auth/apple/callback',
+  },
+  session: {
+    refreshTokenDays: parseInt(process.env.SESSION_REFRESH_TOKEN_DAYS, 10) || 30,
+    heartbeatIntervalSeconds: parseInt(process.env.SESSION_HEARTBEAT_INTERVAL, 10) || 240,
+  },
+  tools: {
+    internalKey: process.env.TOOLS_INTERNAL_KEY || '',
+  },
+  quantix: {
+    baseUrl: process.env.QUANTIX_BASE_URL || 'http://localhost:3001/api/v1',
+    internalKey: process.env.QUANTIX_INTERNAL_KEY || '',
+    userContextSecret: process.env.USER_CONTEXT_SECRET || '',
   },
 });

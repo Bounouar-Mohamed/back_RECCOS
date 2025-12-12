@@ -17,6 +17,12 @@ export class DeveloperInfoDto {
 /**
  * Réponse d'une propriété avec informations du DEVELOPER filtrées
  */
+export class DeveloperBrandDto {
+  id: string | null;
+  name: string;
+  logoUrl: string | null;
+}
+
 export class PropertyResponseDto {
   id: string;
   title: string;
@@ -40,6 +46,7 @@ export class PropertyResponseDto {
   yearBuilt: number | null;
   status: string;
   publishedAt: Date | null;
+  availableAt: Date | null;
   rejectionReason: string | null;
   
   // Informations financières
@@ -98,8 +105,12 @@ export class PropertyResponseDto {
   communityAmenities: string[] | null;
   communityName: string | null;
   
+  metadata: Record<string, any> | null;
+
   // DEVELOPER (sans contact)
   developer: DeveloperInfoDto | null;
+
+  developerBrand: DeveloperBrandDto | null;
   
   // ADMIN qui a publié (sans contact)
   publishedBy: DeveloperInfoDto | null;
@@ -112,6 +123,7 @@ export class PropertyResponseDto {
  * Fonction helper pour transformer une Property en PropertyResponseDto
  */
 export function toPropertyResponseDto(property: Property): PropertyResponseDto {
+  const metadata: Record<string, any> | null = property.metadata ?? null;
   const developerInfo = property.developer
     ? {
         id: property.developer.id,
@@ -127,6 +139,22 @@ export function toPropertyResponseDto(property: Property): PropertyResponseDto {
         username: property.publishedBy.username,
         firstName: property.publishedBy.firstName,
         lastName: property.publishedBy.lastName,
+      }
+    : null;
+
+  const brandInfo: DeveloperBrandDto | null = property.brandDeveloper
+    ? {
+        id: property.brandDeveloper.id,
+        name: property.brandDeveloper.name,
+        logoUrl: property.brandDeveloper.logoUrl ?? null,
+      }
+    : metadata?.developerName
+    ? {
+        id: null,
+        name: metadata.developerName,
+        logoUrl: (metadata.developerLogoFile as string | undefined) ??
+          (metadata.developerLogoUrl as string | undefined) ??
+          null,
       }
     : null;
 
@@ -153,6 +181,7 @@ export function toPropertyResponseDto(property: Property): PropertyResponseDto {
     yearBuilt: property.yearBuilt,
     status: property.status,
     publishedAt: property.publishedAt,
+    availableAt: property.availableAt,
     rejectionReason: property.rejectionReason,
     rentalYield: property.rentalYield ? Number(property.rentalYield) : null,
     expectedROI: property.expectedROI ? Number(property.expectedROI) : null,
@@ -192,7 +221,9 @@ export function toPropertyResponseDto(property: Property): PropertyResponseDto {
     unitNumber: property.unitNumber,
     communityAmenities: property.communityAmenities,
     communityName: property.communityName,
+    metadata,
     developer: developerInfo,
+    developerBrand: brandInfo,
     publishedBy: publishedByInfo,
     createdAt: property.createdAt,
     updatedAt: property.updatedAt,

@@ -4,9 +4,11 @@ import {
   ForbiddenException,
   BadRequestException,
 } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, FindOptionsWhere, Between, LessThanOrEqual, MoreThanOrEqual } from 'typeorm';
 import { Property, PropertyStatus } from '../../database/entities/property.entity';
+import { DeveloperBrand } from '../../database/entities/developer-brand.entity';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { CreatePropertyDto } from './dto/create-property.dto';
 import { UpdatePropertyDto } from './dto/update-property.dto';
@@ -18,6 +20,8 @@ export class PropertiesService {
   constructor(
     @InjectRepository(Property)
     private propertiesRepository: Repository<Property>,
+    @InjectRepository(DeveloperBrand)
+    private developerBrandsRepository: Repository<DeveloperBrand>,
   ) {}
 
   /**
@@ -30,18 +34,42 @@ export class PropertiesService {
   ): Promise<Property> {
     // Si ADMIN crée, il peut définir un DEVELOPER différent
     // Sinon, le créateur devient le DEVELOPER
-    const { developerId: dtoDeveloperId, status: dtoStatus, ...propertyData } = createPropertyDto;
+    const {
+      developerId: dtoDeveloperId,
+      status: dtoStatus,
+      brandDeveloperId,
+      availableAt: availableAtString,
+      ...propertyData
+    } = createPropertyDto;
     const developerId = dtoDeveloperId || creatorId;
+    let brandDeveloperIdValue: string | null = null;
+
+    if (brandDeveloperId) {
+      brandDeveloperIdValue = await this.assertBrandExists(brandDeveloperId);
+    }
+
+    // Convertir availableAt de string à Date
+    let availableAtDate: Date | null = null;
+    if (availableAtString && availableAtString !== '') {
+      const parsedDate = new Date(availableAtString);
+      if (!isNaN(parsedDate.getTime())) {
+        availableAtDate = parsedDate;
+      }
+    }
+
+    const canOverrideStatus =
+      (creatorRole === UserRole.ADMIN || creatorRole === UserRole.SUPERADMIN) && dtoStatus;
 
     const property = this.propertiesRepository.create({
       ...propertyData,
       developerId,
-      // ADMIN peut créer directement en PENDING si souhaité
-      status:
-        creatorRole === UserRole.ADMIN && dtoStatus
-          ? dtoStatus
-          : PropertyStatus.DRAFT,
+      brandDeveloperId: brandDeveloperIdValue,
+      availableAt: availableAtDate,
+      // ADMIN ou SUPERADMIN peuvent choisir le statut initial sinon DRAFT
+      status: canOverrideStatus ? dtoStatus : PropertyStatus.DRAFT,
     });
+
+    this.ensureAvailabilityStatus(property);
 
     return this.propertiesRepository.save(property);
   }
@@ -49,8 +77,8 @@ export class PropertiesService {
   /**
    * Lister les annonces avec filtres
    * - CLIENT : voit uniquement les annonces PUBLISHED
-   * - DEVELOPER : voit ses propres annonces
-   * - ADMIN : voit toutes les annonces
+   * - ADMIN : voit ses propres annonces
+   * - SUPERADMIN : voit toutes les annonces
    */
   async findAll(
     filters: FilterPropertyDto,
@@ -64,14 +92,11 @@ export class PropertiesService {
     const where: FindOptionsWhere<Property> = {};
 
     // Filtres selon le rôle
-    if (userRole === UserRole.CLIENT) {
-      // CLIENT voit uniquement les annonces publiées
-      where.status = PropertyStatus.PUBLISHED;
-    } else if (userRole === UserRole.DEVELOPER && userId) {
-      // DEVELOPER voit ses propres annonces
+    if (userRole === UserRole.ADMIN && userId) {
+      // ADMIN voit ses propres annonces
       where.developerId = userId;
     }
-    // ADMIN voit tout (pas de filtre)
+    // SUPERADMIN voit tout (pas de filtre)
 
     // Appliquer les filtres de recherche
     if (filters.propertyType) {
@@ -87,11 +112,20 @@ export class PropertiesService {
       where.status = filters.status;
     }
 
-    if (filters.zone) {
-      where.zone = filters.zone;
-    }
-
     const queryBuilder = this.propertiesRepository.createQueryBuilder('property');
+
+    if (userRole === UserRole.CLIENT) {
+      const clientVisibleStatuses = [PropertyStatus.PUBLISHED, PropertyStatus.UPCOMING];
+      if (filters.status && clientVisibleStatuses.includes(filters.status)) {
+        queryBuilder.andWhere('property.status = :clientStatus', {
+          clientStatus: filters.status,
+        });
+      } else {
+        queryBuilder.andWhere('property.status IN (:...clientStatuses)', {
+          clientStatuses: clientVisibleStatuses,
+        });
+      }
+    }
 
     // Appliquer les conditions where
     Object.keys(where).forEach((key) => {
@@ -99,6 +133,15 @@ export class PropertiesService {
         queryBuilder.andWhere(`property.${key} = :${key}`, { [key]: where[key] });
       }
     });
+
+    if (filters.zone) {
+      const zoneValue = filters.zone.trim().toLowerCase();
+      if (zoneValue.length > 0) {
+        queryBuilder.andWhere('LOWER(property.zone) LIKE :zoneFilter', {
+          zoneFilter: `%${zoneValue}%`,
+        });
+      }
+    }
 
     // Filtres de prix
     if (filters.minPrice !== undefined || filters.maxPrice !== undefined) {
@@ -134,6 +177,15 @@ export class PropertiesService {
           maxArea: filters.maxArea,
         });
       }
+    }
+
+    // Recherche textuelle (titre / zone)
+    if (filters.search) {
+      const likeValue = `%${filters.search.toLowerCase()}%`;
+      queryBuilder.andWhere(
+        '(LOWER(property.title) LIKE :search OR LOWER(property.zone) LIKE :search)',
+        { search: likeValue },
+      );
     }
 
     // Filtre nombre de chambres
@@ -204,6 +256,7 @@ export class PropertiesService {
     const properties = await queryBuilder
       .leftJoinAndSelect('property.developer', 'developer')
       .leftJoinAndSelect('property.publishedBy', 'publishedBy')
+      .leftJoinAndSelect('property.brandDeveloper', 'brandDeveloper')
       .orderBy('property.createdAt', 'DESC')
       .skip(skip)
       .take(limit)
@@ -227,7 +280,7 @@ export class PropertiesService {
   async findOne(id: string, userRole: UserRole, userId?: string): Promise<PropertyResponseDto> {
     const property = await this.propertiesRepository.findOne({
       where: { id },
-      relations: ['developer', 'publishedBy'],
+      relations: ['developer', 'publishedBy', 'brandDeveloper'],
     });
 
     if (!property) {
@@ -235,17 +288,23 @@ export class PropertiesService {
     }
 
     // Vérifier les permissions
-    if (userRole === UserRole.CLIENT && property.status !== PropertyStatus.PUBLISHED) {
-      throw new ForbiddenException('This property is not available');
+    if (userRole === UserRole.CLIENT) {
+      if (property.status === PropertyStatus.UPCOMING) {
+        throw new ForbiddenException(
+          'This property is not yet available for investment. Please wait until the countdown ends.',
+        );
+      }
+      if (property.status !== PropertyStatus.PUBLISHED) {
+        throw new ForbiddenException('This property is not available');
+      }
+      if (!this.isAvailableNow(property.availableAt)) {
+        throw new ForbiddenException(
+          'This property is not yet available for investment. Please wait until the countdown ends.',
+        );
+      }
     }
 
-    if (
-      userRole === UserRole.DEVELOPER &&
-      property.developerId !== userId &&
-      property.status !== PropertyStatus.PUBLISHED
-    ) {
-      throw new ForbiddenException('You can only view your own properties');
-    }
+    // Pour ADMIN, la restriction de visibilité détaillée est gérée au niveau des listes
 
     // Transformer pour exclure les informations de contact du DEVELOPER
     return toPropertyResponseDto(property);
@@ -263,15 +322,15 @@ export class PropertiesService {
     // Récupérer la propriété brute pour vérifier les permissions
     const propertyRaw = await this.propertiesRepository.findOne({
       where: { id },
-      relations: ['developer', 'publishedBy'],
+      relations: ['developer', 'publishedBy', 'brandDeveloper'],
     });
 
     if (!propertyRaw) {
       throw new NotFoundException(`Property with ID ${id} not found`);
     }
 
-    // DEVELOPER ne peut modifier que ses propres annonces en DRAFT ou PENDING
-    if (userRole === UserRole.DEVELOPER) {
+    // ADMIN ne peut modifier que ses propres annonces en DRAFT, PENDING ou REJECTED
+    if (userRole === UserRole.ADMIN) {
       if (propertyRaw.developerId !== userId) {
         throw new ForbiddenException('You can only update your own properties');
       }
@@ -284,20 +343,46 @@ export class PropertiesService {
           'You can only update properties in DRAFT, PENDING, or REJECTED status',
         );
       }
-      // DEVELOPER ne peut pas changer le status
+      // ADMIN ne peut pas changer le status sur ses propres annonces
       delete updatePropertyDto.status;
       delete updatePropertyDto.rejectionReason;
     }
 
-    // ADMIN peut tout modifier
-    if (userRole === UserRole.ADMIN && updatePropertyDto.status) {
+    // SUPERADMIN peut tout modifier, y compris le status
+    if (userRole === UserRole.SUPERADMIN && updatePropertyDto.status) {
       if (updatePropertyDto.status === PropertyStatus.PUBLISHED) {
         propertyRaw.publishedAt = new Date();
         propertyRaw.publishedById = userId;
       }
     }
 
+    let brandDeveloperIdValue: string | null | undefined;
+    if (updatePropertyDto.brandDeveloperId !== undefined) {
+      brandDeveloperIdValue = await this.assertBrandExists(updatePropertyDto.brandDeveloperId);
+      delete updatePropertyDto.brandDeveloperId;
+    }
+
+    // Gérer explicitement availableAt pour la conversion string -> Date
+    if (updatePropertyDto.availableAt !== undefined) {
+      if (updatePropertyDto.availableAt === null || updatePropertyDto.availableAt === '') {
+        propertyRaw.availableAt = null;
+      } else {
+        const parsedDate = new Date(updatePropertyDto.availableAt);
+        if (!isNaN(parsedDate.getTime())) {
+          propertyRaw.availableAt = parsedDate;
+        }
+      }
+      delete updatePropertyDto.availableAt;
+    }
+
     Object.assign(propertyRaw, updatePropertyDto);
+
+    if (brandDeveloperIdValue !== undefined) {
+      propertyRaw.brandDeveloperId = brandDeveloperIdValue;
+    }
+
+    this.ensureAvailabilityStatus(propertyRaw);
+
     const updatedProperty = await this.propertiesRepository.save(propertyRaw);
     
     // Retourner la version transformée sans contacts
@@ -314,7 +399,7 @@ export class PropertiesService {
       throw new NotFoundException(`Property with ID ${id} not found`);
     }
 
-    if (property.status === PropertyStatus.PUBLISHED) {
+    if (property.status === PropertyStatus.PUBLISHED || property.status === PropertyStatus.UPCOMING) {
       throw new BadRequestException('Property is already published');
     }
 
@@ -323,8 +408,8 @@ export class PropertiesService {
     }
 
     property.status = PropertyStatus.PUBLISHED;
-    property.publishedAt = new Date();
     property.publishedById = adminId;
+    this.ensureAvailabilityStatus(property);
 
     return this.propertiesRepository.save(property);
   }
@@ -358,17 +443,85 @@ export class PropertiesService {
       throw new NotFoundException(`Property with ID ${id} not found`);
     }
 
-    // DEVELOPER ne peut supprimer que ses propres annonces non publiées
-    if (userRole === UserRole.DEVELOPER) {
+    // ADMIN ne peut supprimer que ses propres annonces non publiées
+    if (userRole === UserRole.ADMIN) {
       if (propertyRaw.developerId !== userId) {
         throw new ForbiddenException('You can only delete your own properties');
       }
-      if (propertyRaw.status === PropertyStatus.PUBLISHED || propertyRaw.status === PropertyStatus.SOLD) {
+      if (
+        propertyRaw.status === PropertyStatus.PUBLISHED ||
+        propertyRaw.status === PropertyStatus.UPCOMING ||
+        propertyRaw.status === PropertyStatus.SOLD
+      ) {
         throw new ForbiddenException('Cannot delete published or sold properties');
       }
     }
 
     await this.propertiesRepository.softDelete(propertyRaw.id);
+  }
+
+  @Cron(CronExpression.EVERY_MINUTE)
+  async releaseUpcomingProperties(): Promise<void> {
+    const now = new Date();
+    const propertiesToPublish = await this.propertiesRepository
+      .createQueryBuilder('property')
+      .where('property.status = :status', { status: PropertyStatus.UPCOMING })
+      .andWhere('property.availableAt IS NOT NULL')
+      .andWhere('property.availableAt <= :now', { now })
+      .getMany();
+
+    if (!propertiesToPublish.length) {
+      return;
+    }
+
+    for (const property of propertiesToPublish) {
+      property.status = PropertyStatus.PUBLISHED;
+      property.publishedAt = property.availableAt ?? new Date();
+      this.ensureAvailabilityStatus(property);
+    }
+
+    await this.propertiesRepository.save(propertiesToPublish);
+  }
+
+  private async assertBrandExists(brandDeveloperId: string): Promise<string> {
+    const brand = await this.developerBrandsRepository.findOne({
+      where: { id: brandDeveloperId },
+    });
+    if (!brand) {
+      throw new BadRequestException('Developer brand not found');
+    }
+    return brand.id;
+  }
+
+  private isAvailableNow(availableAt?: Date | null): boolean {
+    if (!availableAt) {
+      return true;
+    }
+    return availableAt.getTime() <= Date.now();
+  }
+
+  private ensureAvailabilityStatus(property: Property): void {
+    if (!property) {
+      return;
+    }
+
+    if (
+      property.status === PropertyStatus.PUBLISHED ||
+      property.status === PropertyStatus.UPCOMING
+    ) {
+      const isLive = this.isAvailableNow(property.availableAt);
+      if (isLive) {
+        property.status = PropertyStatus.PUBLISHED;
+        if (!property.publishedAt) {
+          property.publishedAt = new Date();
+        }
+      } else {
+        property.status = PropertyStatus.UPCOMING;
+        if (!property.publishedAt && property.availableAt) {
+          property.publishedAt = property.availableAt;
+        }
+      }
+    }
   }
 
   /**

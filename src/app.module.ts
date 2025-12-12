@@ -6,8 +6,16 @@ import { ConfigModule as AppConfigModule } from './config/config.module';
 import { DatabaseModule } from './database/database.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
+import { AdminModule } from './modules/admin/admin.module';
 import { IdentityVerificationModule } from './modules/identity-verification/identity-verification.module';
 import { PropertiesModule } from './modules/properties/properties.module';
+import { DeveloperBrandsModule } from './modules/developer-brands/developer-brands.module';
+import { LaunchNotificationsModule } from './modules/launch-notifications/launch-notifications.module';
+import { PurchasesModule } from './modules/purchases/purchases.module';
+import { ToolsModule } from './modules/tools/tools.module';
+import { AiConversationsModule } from './modules/ai-conversations/ai-conversations.module';
+import { AiGatewayModule } from './modules/ai-gateway/ai-gateway.module';
+import { RealtimeGatewayModule } from './modules/realtime-gateway/realtime-gateway.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
@@ -36,8 +44,16 @@ import { NonApiRejectMiddleware } from './common/middleware/non-api-reject.middl
     }),
     AuthModule,
     UsersModule,
+    AdminModule,
     IdentityVerificationModule,
     PropertiesModule,
+    DeveloperBrandsModule,
+    LaunchNotificationsModule,
+    PurchasesModule,
+    ToolsModule,
+    AiConversationsModule,
+    AiGatewayModule,
+    RealtimeGatewayModule,
   ],
   controllers: [HealthController],
   providers: [

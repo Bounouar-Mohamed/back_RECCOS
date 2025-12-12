@@ -3,8 +3,8 @@
  * 
  * Hiérarchie des permissions (du plus restrictif au plus permissif) :
  * - CLIENT : Utilisateur standard, accès limité aux fonctionnalités de base
- * - DEVELOPER : Développeur, accès aux APIs et outils de développement
- * - ADMIN : Administrateur, accès complet à toutes les fonctionnalités
+ * - ADMIN : Administrateur, gestion avancée (espace admin)
+ * - SUPERADMIN : Super administrateur, accès complet + gestion des comptes et rôles
  */
 export enum UserRole {
   /**
@@ -17,23 +17,21 @@ export enum UserRole {
   CLIENT = 'client',
 
   /**
-   * Rôle DEVELOPER
-   * - Développeur ou partenaire technique
-   * - Accès aux APIs de développement
-   * - Peut tester les fonctionnalités
-   * - Accès aux logs et métriques (selon configuration)
-   */
-  DEVELOPER = 'developer',
-
-  /**
    * Rôle ADMIN
    * - Administrateur système
-   * - Accès complet à toutes les fonctionnalités
-   * - Gestion des utilisateurs
-   * - Configuration de l'application
-   * - Accès aux données sensibles
+   * - Accès aux fonctionnalités d'administration (propriétés, promoteurs, performances, etc.)
+   * - Accès aux données sensibles nécessaires à l'administration
    */
   ADMIN = 'admin',
+
+  /**
+   * Rôle SUPERADMIN
+   * - Super administrateur de la plateforme
+   * - Accès complet à toutes les fonctionnalités
+   * - Gestion des utilisateurs et de leurs rôles
+   * - Gestion des statuts et de la configuration globale
+   */
+  SUPERADMIN = 'superadmin',
 }
 
 /**
@@ -59,8 +57,8 @@ export function isValidRole(role: string): role is UserRole {
  */
 export const ROLE_HIERARCHY: Record<UserRole, number> = {
   [UserRole.CLIENT]: 1,
-  [UserRole.DEVELOPER]: 2,
-  [UserRole.ADMIN]: 3,
+  [UserRole.ADMIN]: 2,
+  [UserRole.SUPERADMIN]: 3,
 };
 
 /**

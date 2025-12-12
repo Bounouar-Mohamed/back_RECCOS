@@ -26,51 +26,48 @@ L'application utilise un système de rôles avec 3 niveaux :
 
 ---
 
-### 2. DEVELOPER
-
-**Valeur** : `developer`
-
-**Description** : Développeur ou partenaire technique
-
-**Permissions** :
-- ✅ Toutes les permissions CLIENT
-- ✅ Accéder aux APIs de développement
-- ✅ Tester les fonctionnalités en cours de développement
-- ✅ Accéder aux logs et métriques (selon configuration)
-- ✅ Utiliser les endpoints de test
-- ❌ Gérer les utilisateurs
-- ❌ Modifier la configuration système
-- ❌ Accéder aux données sensibles de tous les utilisateurs
-
-**Utilisation** : Rôle attribué manuellement par un administrateur pour les développeurs et partenaires techniques.
-
----
-
-### 3. ADMIN
+### 2. ADMIN
 
 **Valeur** : `admin`
 
-**Description** : Administrateur système avec accès complet
+**Description** : Administrateur fonctionnel (espace admin)
 
 **Permissions** :
-- ✅ Toutes les permissions DEVELOPER
+- ✅ Toutes les permissions CLIENT
+- ✅ Gérer les propriétés, promoteurs, performances, etc.
+- ✅ Accès aux tableaux de bord et statistiques avancées
+- ❌ Créer ou supprimer des comptes administrateurs
+- ❌ Changer les rôles des autres administrateurs
+
+**Utilisation** : Rôle attribué pour les personnes qui gèrent l’activité (propriétés, promoteurs, KPI…).
+
+---
+
+### 3. SUPERADMIN
+
+**Valeur** : `superadmin`
+
+**Description** : Super administrateur système avec accès complet
+
+**Permissions** :
+- ✅ Toutes les permissions ADMIN
 - ✅ Gérer tous les utilisateurs (créer, modifier, supprimer)
-- ✅ Modifier les rôles des utilisateurs
+- ✅ Modifier les rôles des utilisateurs (client, admin, superadmin)
 - ✅ Accéder à toutes les données
 - ✅ Configuration de l'application
 - ✅ Accès aux logs système complets
-- ✅ Gestion des fonctionnalités administratives
+- ✅ Gestion des fonctionnalités administratives critiques
 
-**Utilisation** : Rôle réservé aux administrateurs système. Doit être attribué manuellement avec précaution.
+**Utilisation** : Rôle réservé aux super administrateurs (fondateurs/tech lead) pour la gestion des comptes et des droits.
 
 ---
 
 ## 🔐 Hiérarchie des rôles
 
 ```
-ADMIN (niveau 3)
+SUPERADMIN (niveau 3)
     ↓
-DEVELOPER (niveau 2)
+ADMIN (niveau 2)
     ↓
 CLIENT (niveau 1)
 ```
@@ -100,9 +97,9 @@ export class AdminController {
     // ...
   }
 
-  // Admins et développeurs peuvent accéder
-  @Get('logs')
-  @Roles(UserRole.ADMIN, UserRole.DEVELOPER)
+// Admins et superadmins peuvent accéder
+@Get('logs')
+@Roles(UserRole.ADMIN, UserRole.SUPERADMIN)
   async getLogs() {
     // ...
   }
@@ -120,8 +117,8 @@ if (user.role === UserRole.ADMIN) {
 }
 
 // Vérifier si un utilisateur a au moins le niveau requis
-if (hasRolePermission(user.role, UserRole.DEVELOPER)) {
-  // L'utilisateur a au moins les permissions DEVELOPER
+if (hasRolePermission(user.role, UserRole.ADMIN)) {
+  // L'utilisateur a au moins les permissions ADMIN
 }
 ```
 

@@ -3,6 +3,7 @@ import {
   UnauthorizedException,
   ConflictException,
   BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
@@ -27,13 +28,109 @@ export class AuthService {
   private readonly LOCKOUT_DURATION_MINUTES = 30;
   private readonly MAX_2FA_ATTEMPTS = 3;
   private readonly TWO_FA_CODE_EXPIRY_MINUTES = 10;
+  private readonly accessTokenTtlMs: number;
+  private readonly refreshTokenTtlMs: number;
+  private readonly heartbeatIntervalSeconds: number;
 
   constructor(
     private usersService: UsersService,
     private jwtService: JwtService,
     private configService: ConfigService,
     private emailService: EmailService,
-  ) { }
+  ) {
+    this.accessTokenTtlMs = this.parseDurationToMs(this.configService.get('jwt.expiresIn') || '24h');
+    this.refreshTokenTtlMs = this.resolveRefreshTokenTtlMs();
+    this.heartbeatIntervalSeconds = this.configService.get<number>('session.heartbeatIntervalSeconds') ?? 240;
+  }
+
+  private parseDurationToMs(duration: string | number): number {
+    if (typeof duration === 'number' && Number.isFinite(duration)) {
+      return duration * 1000;
+    }
+
+    const value = typeof duration === 'string' ? duration.trim().toLowerCase() : '';
+    const match = value.match(/^(\d+)\s*(s|m|h|d)?$/i);
+
+    if (match) {
+      const amount = Number(match[1]);
+      const unit = match[2]?.toLowerCase() ?? 's';
+
+      switch (unit) {
+        case 'd':
+          return amount * 24 * 60 * 60 * 1000;
+        case 'h':
+          return amount * 60 * 60 * 1000;
+        case 'm':
+          return amount * 60 * 1000;
+        case 's':
+        default:
+          return amount * 1000;
+      }
+    }
+
+    const numericValue = Number(value);
+    if (!Number.isNaN(numericValue)) {
+      return numericValue * 1000;
+    }
+
+    // Fallback: 24h
+    return 24 * 60 * 60 * 1000;
+  }
+
+  private resolveRefreshTokenTtlMs(): number {
+    const refreshDays = this.configService.get<number>('session.refreshTokenDays');
+    if (refreshDays && refreshDays > 0) {
+      return refreshDays * 24 * 60 * 60 * 1000;
+    }
+    const refreshDuration = this.configService.get('jwt.refreshExpiresIn') || '30d';
+    return this.parseDurationToMs(refreshDuration);
+  }
+
+  private hashToken(token: string): string {
+    return createHash('sha256').update(token).digest('hex');
+  }
+
+  private mapUserResponse(user: any) {
+    return {
+      id: user.id,
+      email: user.email,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      username: user.username || '',
+      role: user.role,
+      emailVerified: user.emailVerified ?? true,
+      isActive: user.isActive ?? true,
+    };
+  }
+
+  private async buildSessionResponse(user: any) {
+    const payload: JwtPayload = {
+      sub: user.id,
+      email: user.email,
+      role: user.role,
+    };
+
+    const access_token = this.jwtService.sign(payload);
+    const accessExpiresAt = new Date(Date.now() + this.accessTokenTtlMs);
+
+    const refresh_token = randomBytes(64).toString('hex');
+    const refreshExpiresAt = new Date(Date.now() + this.refreshTokenTtlMs);
+    const refreshHash = this.hashToken(refresh_token);
+
+    await this.usersService.setRefreshToken(user.id, refreshHash, refreshExpiresAt);
+
+    return {
+      access_token,
+      refresh_token,
+      expiresAt: accessExpiresAt.toISOString(),
+      refreshExpiresAt: refreshExpiresAt.toISOString(),
+      user: this.mapUserResponse(user),
+      session: {
+        lastHeartbeatAt: new Date().toISOString(),
+        heartbeatIntervalSeconds: this.heartbeatIntervalSeconds,
+      },
+    };
+  }
 
   async validateUser(email: string, password: string): Promise<any> {
     const user = await this.usersService.findByEmail(email);
@@ -91,7 +188,7 @@ export class AuthService {
       throw new UnauthorizedException('Email not verified');
     }
     if (!user.isActive) {
-      throw new UnauthorizedException('Account is not active');
+      throw new ForbiddenException('ACCOUNT_DISABLED');
     }
 
     // Réinitialiser les tentatives échouées après un login réussi
@@ -132,27 +229,9 @@ export class AuthService {
 
     await this.usersService.updateLastLogin(user.id);
 
-    const payload: JwtPayload = {
-      sub: user.id,
-      email: user.email,
-      role: user.role,
-    };
-
     this.logger.log(`Successful login: ${user.email} from IP: ${ipAddress}`);
 
-    return {
-      access_token: this.jwtService.sign(payload),
-      user: {
-        id: user.id,
-        email: user.email,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        username: user.username || '',
-        role: user.role,
-        emailVerified: user.emailVerified ?? true,
-        isActive: user.isActive ?? true,
-      },
-    };
+    return this.buildSessionResponse(user);
   }
 
   /**
@@ -531,6 +610,69 @@ export class AuthService {
     return user;
   }
 
+  async refreshSession(refreshToken: string) {
+    if (!refreshToken) {
+      throw new UnauthorizedException('REFRESH_TOKEN_REQUIRED');
+    }
+
+    const hashedToken = this.hashToken(refreshToken);
+    const user = await this.usersService.findByRefreshTokenHash(hashedToken);
+
+    if (!user || !user.refreshTokenExpiresAt) {
+      throw new UnauthorizedException('REFRESH_TOKEN_INVALID');
+    }
+
+    if (user.refreshTokenExpiresAt.getTime() < Date.now()) {
+      await this.usersService.clearRefreshToken(user.id);
+      throw new UnauthorizedException('REFRESH_TOKEN_EXPIRED');
+    }
+
+    return this.buildSessionResponse(user);
+  }
+
+  async heartbeat(refreshToken: string) {
+    if (!refreshToken) {
+      throw new UnauthorizedException('REFRESH_TOKEN_REQUIRED');
+    }
+
+    const hashedToken = this.hashToken(refreshToken);
+    const user = await this.usersService.findByRefreshTokenHash(hashedToken);
+
+    if (!user || !user.refreshTokenExpiresAt) {
+      throw new UnauthorizedException('REFRESH_TOKEN_INVALID');
+    }
+
+    if (user.refreshTokenExpiresAt.getTime() < Date.now()) {
+      await this.usersService.clearRefreshToken(user.id);
+      throw new UnauthorizedException('REFRESH_TOKEN_EXPIRED');
+    }
+
+    // Mettre à jour le lastHeartbeatAt sans générer un nouveau refresh token
+    await this.usersService.updateHeartbeat(user.id);
+
+    // Générer un nouvel access token mais garder le même refresh token
+    const payload: JwtPayload = {
+      sub: user.id,
+      email: user.email,
+      role: user.role,
+    };
+
+    const access_token = this.jwtService.sign(payload);
+    const accessExpiresAt = new Date(Date.now() + this.accessTokenTtlMs);
+
+    return {
+      access_token,
+      refresh_token: refreshToken, // Renvoyer le même refresh token
+      expiresAt: accessExpiresAt.toISOString(),
+      refreshExpiresAt: user.refreshTokenExpiresAt.toISOString(),
+      user: this.mapUserResponse(user),
+      session: {
+        lastHeartbeatAt: new Date().toISOString(),
+        heartbeatIntervalSeconds: this.heartbeatIntervalSeconds,
+      },
+    };
+  }
+
   async enable2FA(userId: string, method: string) {
     const user = await this.usersService.findOne(userId);
 
@@ -720,6 +862,11 @@ export class AuthService {
   async sendOTP(email: string, ipAddress?: string): Promise<{ message: string }> {
     // Vérifier si l'utilisateur existe
     let user = await this.usersService.findByEmail(email);
+
+    if (user && user.emailVerified && user.isActive === false) {
+      this.logger.warn(`OTP request blocked for disabled account: ${email} from IP: ${ipAddress}`);
+      throw new ForbiddenException('ACCOUNT_DISABLED');
+    }
 
     // Si l'utilisateur n'existe pas, créer un compte basique
     if (!user) {
@@ -939,6 +1086,11 @@ export class AuthService {
       throw new UnauthorizedException('Invalid OTP code');
     }
 
+    // Si le compte a déjà été vérifié mais a été désactivé (ex: par un admin), bloquer l'accès
+    if (!user.isActive && user.emailVerified) {
+      throw new ForbiddenException('ACCOUNT_DISABLED');
+    }
+
     // Vérifier si le code OTP existe et n'est pas expiré
     if (!user.otpCode || !user.otpExpiresAt) {
       throw new UnauthorizedException('No OTP code found. Please request a new one.');
@@ -958,37 +1110,21 @@ export class AuthService {
       throw new UnauthorizedException('Invalid OTP code');
     }
 
+    const wasEmailVerified = !!user.emailVerified;
+
     // Code valide : nettoyer l'OTP et activer le compte
     user.otpCode = null;
     user.otpExpiresAt = null;
     user.emailVerified = true; // L'email est vérifié via l'OTP
-    user.isActive = true;
+    // N'activer le compte que s'il ne l'était pas encore (première vérification)
+    if (!wasEmailVerified) {
+      user.isActive = true;
+    }
     user.lastLoginAt = new Date();
     await this.usersService.save(user);
 
-    // Générer le token JWT
-    const payload: JwtPayload = {
-      sub: user.id,
-      email: user.email,
-      role: user.role,
-    };
-
-    const access_token = this.jwtService.sign(payload);
-
     this.logger.log(`User logged in via OTP: ${email} from IP: ${ipAddress}`);
 
-    return {
-      access_token,
-      user: {
-        id: user.id,
-        email: user.email,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        username: user.username,
-        role: user.role,
-        emailVerified: user.emailVerified,
-        isActive: user.isActive,
-      },
-    };
+    return this.buildSessionResponse(user);
   }
 }

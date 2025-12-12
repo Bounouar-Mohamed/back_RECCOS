@@ -19,6 +19,10 @@ export class FilterPropertyDto {
   @IsOptional()
   zone?: string;
 
+  @IsString()
+  @IsOptional()
+  search?: string;
+
   @Type(() => Number)
   @IsNumber()
   @IsOptional()
@@ -103,5 +107,9 @@ export class FilterPropertyDto {
   @IsOptional()
   @Min(0)
   maxDistanceToBeach?: number;
+
+  @IsString()
+  @IsOptional()
+  locale?: string;
 }
 

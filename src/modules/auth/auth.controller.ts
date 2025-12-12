@@ -20,6 +20,7 @@ import { SendOtpDto } from './dto/send-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { RefreshTokenDto } from './dto/refresh-token.dto';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -235,5 +236,23 @@ export class AuthController {
   async verifyOTP(@Body() verifyOtpDto: VerifyOtpDto, @Req() req: Request) {
     const ipAddress = req.ip || req.socket.remoteAddress || 'unknown';
     return this.authService.verifyOTP(verifyOtpDto.email, verifyOtpDto.code, ipAddress);
+  }
+
+  @Public()
+  @Post('refresh')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Refresh access token using refresh token' })
+  @ApiResponse({ status: 200, description: 'Session refreshed successfully' })
+  async refresh(@Body() dto: RefreshTokenDto) {
+    return this.authService.refreshSession(dto.refreshToken);
+  }
+
+  @Public()
+  @Post('heartbeat')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Keep session alive via heartbeat' })
+  @ApiResponse({ status: 200, description: 'Heartbeat acknowledged and session extended' })
+  async heartbeat(@Body() dto: RefreshTokenDto) {
+    return this.authService.heartbeat(dto.refreshToken);
   }
 }
