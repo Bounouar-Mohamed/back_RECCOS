@@ -3,6 +3,7 @@ import { ValidationPipe, Logger } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { ConfigService } from '@nestjs/config';
+import helmet from 'helmet';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
@@ -12,6 +13,16 @@ async function bootstrap() {
 
   const configService = app.get(ConfigService);
   const isProduction = configService.get('NODE_ENV') === 'production';
+
+  // ═══════════════════════════════════════════════════════════════════════════════
+  // SÉCURITÉ: Helmet pour les headers HTTP de sécurité
+  // ═══════════════════════════════════════════════════════════════════════════════
+  app.use(helmet({
+    contentSecurityPolicy: isProduction ? undefined : false, // Désactivé en dev pour Swagger
+    crossOriginEmbedderPolicy: false, // Permet les requêtes cross-origin
+    hsts: isProduction ? { maxAge: 31536000, includeSubDomains: true } : false,
+  }));
+  logger.log('🛡️  Helmet activé pour les headers de sécurité');
 
   // Validation des variables critiques en production
   if (isProduction) {

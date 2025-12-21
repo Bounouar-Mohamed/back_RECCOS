@@ -72,18 +72,21 @@ export class RealtimeGatewayService {
   ): Promise<EphemeralTokenResponse> {
     const isAuthenticated = !!user?.id;
 
-    // Déterminer userId et tenantId
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // IMPORTANT: tenantId = identifiant du CLIENT (ex: "reccos"), PAS l'utilisateur
+    // Cela permet de tracker la consommation par client dans Quantix
+    // ═══════════════════════════════════════════════════════════════════════════════
+    const CLIENT_TENANT_ID = process.env.TENANT_ID || 'reccos';
+
     let userId: string;
-    let tenantId: string;
+    const tenantId = CLIENT_TENANT_ID; // Toujours utiliser l'identifiant du client
 
     if (isAuthenticated) {
       userId = user.id;
-      tenantId = dto.tenantId || userId;
     } else {
       // Utilisateur anonyme
       const sessionId = `anon_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
       userId = dto.userId || sessionId;
-      tenantId = dto.tenantId || sessionId;
     }
 
     // Ne pas inclure ip et userAgent dans le payload envoyé à Quantix
@@ -130,9 +133,10 @@ export class RealtimeGatewayService {
    * Récupère la configuration Realtime
    */
   async getConfig(userId?: string, tenantId?: string): Promise<any> {
+    const CLIENT_TENANT_ID = process.env.TENANT_ID || 'reccos';
     const headers = this.buildHeaders({
       userId: userId || 'anonymous',
-      tenantId: tenantId || 'anonymous',
+      tenantId: tenantId || CLIENT_TENANT_ID,
       roles: [],
     });
 
@@ -149,9 +153,10 @@ export class RealtimeGatewayService {
    * Révoque un token/session
    */
   async revokeToken(sessionId: string, userId: string): Promise<{ success: boolean }> {
+    const CLIENT_TENANT_ID = process.env.TENANT_ID || 'reccos';
     const headers = this.buildHeaders({
       userId,
-      tenantId: userId,
+      tenantId: CLIENT_TENANT_ID,
       roles: [],
     });
 
@@ -178,9 +183,10 @@ export class RealtimeGatewayService {
     userId: string;
     correlationId?: string;
   }): Promise<any> {
+    const CLIENT_TENANT_ID = process.env.TENANT_ID || 'reccos';
     const headers = this.buildHeaders({
       userId: dto.userId,
-      tenantId: dto.userId,
+      tenantId: CLIENT_TENANT_ID,
       roles: [],
     });
 

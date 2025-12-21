@@ -60,32 +60,29 @@ export class AiGatewayService {
     // Gérer les utilisateurs authentifiés vs anonymes
     const isAuthenticated = !!user?.id;
     
-    // Pour les utilisateurs authentifiés, utiliser leur ID
-    // Pour les anonymes, utiliser un ID stable basé sur le conversationId
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // IMPORTANT: tenantId = identifiant du CLIENT (ex: "reccos"), PAS l'utilisateur
+    // Cela permet de tracker la consommation par client dans Quantix
+    // ═══════════════════════════════════════════════════════════════════════════════
+    const CLIENT_TENANT_ID = process.env.TENANT_ID || 'reccos';
+    
     let userId: string;
     let conversationId: string;
-    let tenantId: string;
+    const tenantId = CLIENT_TENANT_ID; // Toujours utiliser l'identifiant du client
     
     if (isAuthenticated) {
       // Utilisateur authentifié
       userId = user.id;
       conversationId = dto.conversationId || `conv_${userId}_${Date.now()}`;
-      tenantId = dto.tenantId || userId;
     } else {
-      // Utilisateur anonyme - utiliser un tenantId STABLE
-      // Si un conversationId existe, l'utiliser pour dériver un tenantId stable
-      // Sinon, créer un nouveau conversationId et tenantId cohérents
+      // Utilisateur anonyme - utiliser un ID stable basé sur le conversationId
       if (dto.conversationId) {
-        // Conversation existante - extraire ou créer un tenantId stable
         conversationId = dto.conversationId;
-        // Utiliser le conversationId comme base du tenantId pour garantir la stabilité
-        tenantId = dto.tenantId || `anon_${conversationId}`;
-        userId = tenantId;
+        userId = `anon_${conversationId}`;
       } else {
         // Nouvelle conversation anonyme
         const sessionId = `anon_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
         conversationId = `conv_${sessionId}_${Date.now()}`;
-        tenantId = sessionId;
         userId = sessionId;
       }
     }
