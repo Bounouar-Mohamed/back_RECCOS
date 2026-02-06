@@ -1,13 +1,12 @@
 import { Column, Entity, ManyToOne } from 'typeorm';
 import { BaseEntity } from './base.entity';
-import { AiConversationEntity } from './ai-conversation.entity';
 
 @Entity('ai_messages')
 export class AiMessageEntity extends BaseEntity {
-  @ManyToOne(() => AiConversationEntity, (conversation) => conversation.messages, {
+  @ManyToOne('AiConversationEntity', 'messages', {
     onDelete: 'CASCADE',
   })
-  conversation: AiConversationEntity;
+  conversation: any;
 
   @Column({ length: 32 })
   role: 'user' | 'assistant' | 'system';

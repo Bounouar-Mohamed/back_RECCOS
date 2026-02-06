@@ -22,6 +22,9 @@ export class User extends BaseEntity {
   @Column({ type: 'varchar', length: 100, nullable: true })
   lastName: string;
 
+  @Column({ type: 'text', nullable: true })
+  avatarUrl: string | null;
+
   @Column({ type: 'date', nullable: true })
   dateOfBirth: Date | null;
 
@@ -187,4 +190,35 @@ export class User extends BaseEntity {
    */
   @Column({ type: 'timestamp', nullable: true })
   lastHeartbeatAt: Date | null;
+
+  // ========== INFORMATIONS BANCAIRES ==========
+  /**
+   * Titulaire du compte bancaire
+   */
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  bankAccountHolder: string | null;
+
+  /**
+   * Nom de la banque
+   */
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  bankName: string | null;
+
+  /**
+   * IBAN
+   */
+  @Column({ type: 'varchar', length: 50, nullable: true })
+  iban: string | null;
+
+  /**
+   * Code SWIFT/BIC
+   */
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  swiftCode: string | null;
+
+  /**
+   * Méthode de paiement préférée
+   */
+  @Column({ type: 'varchar', length: 50, nullable: true })
+  payoutMethod: string | null;
 }

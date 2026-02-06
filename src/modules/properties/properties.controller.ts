@@ -36,6 +36,20 @@ export class PropertiesController {
   constructor(private readonly propertiesService: PropertiesService) {}
 
   /**
+   * Obtenir les statistiques (ADMIN uniquement)
+   * IMPORTANT: Cette route doit être AVANT :id pour éviter les conflits
+   */
+  @Get('admin/stats')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN, UserRole.SUPERADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get property statistics (ADMIN or SUPERADMIN)' })
+  @ApiResponse({ status: 200, description: 'Statistics retrieved successfully' })
+  async getStats() {
+    return this.propertiesService.getStats();
+  }
+
+  /**
    * Lister les annonces publiques pour le site (sans authentification)
    */
   @Get('public')
@@ -169,17 +183,5 @@ export class PropertiesController {
     await this.propertiesService.remove(id, user.role, user.id);
   }
 
-  /**
-   * Obtenir les statistiques (ADMIN uniquement)
-   */
-  @Get('admin/stats')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.SUPERADMIN)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get property statistics (ADMIN or SUPERADMIN)' })
-  @ApiResponse({ status: 200, description: 'Statistics retrieved successfully' })
-  async getStats() {
-    return this.propertiesService.getStats();
-  }
 }
 

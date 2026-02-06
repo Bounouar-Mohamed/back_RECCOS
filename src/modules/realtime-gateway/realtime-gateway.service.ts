@@ -35,9 +35,12 @@ export class RealtimeGatewayService {
       process.env.QUANTIX_BASE_URL ||
       'http://localhost:3001/api/v1';
 
+    // SECURITY: Use tenant-specific API key (new system) or fallback to legacy
     this.internalKey =
-      this.configService.get<string>('quantix.internalKey') ||
+      process.env.QUANTIX_API_KEY ||
+      this.configService.get<string>('quantix.apiKey') ||
       process.env.QUANTIX_INTERNAL_KEY ||
+      this.configService.get<string>('quantix.internalKey') ||
       '';
 
     this.userContextSecret =
@@ -46,7 +49,7 @@ export class RealtimeGatewayService {
       '';
 
     if (!this.internalKey) {
-      throw new InternalServerErrorException('QUANTIX_INTERNAL_KEY manquante');
+      throw new InternalServerErrorException('QUANTIX_API_KEY manquante');
     }
 
     if (!this.userContextSecret) {
@@ -233,7 +236,10 @@ export class RealtimeGatewayService {
       .digest('hex');
 
     return {
-      'x-internal-key': this.internalKey,
+      // SECURITY: Use x-api-key for tenant-specific authentication
+      'x-api-key': this.internalKey,
+      // Explicit profile declaration (Reccos = noor only)
+      'x-ai-profile': 'noor',
       'tenant-id': params.tenantId,
       'user-id': params.userId,
       'x-user-context': encodedContext,

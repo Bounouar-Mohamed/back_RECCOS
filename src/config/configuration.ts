@@ -93,6 +93,9 @@ export default () => ({
   },
   quantix: {
     baseUrl: process.env.QUANTIX_BASE_URL || 'http://localhost:3001/api/v1',
+    // SECURITY: Tenant-specific API key (new system)
+    apiKey: process.env.QUANTIX_API_KEY || '',
+    // Legacy key (deprecated, use QUANTIX_API_KEY instead)
     internalKey: process.env.QUANTIX_INTERNAL_KEY || '',
     userContextSecret: process.env.USER_CONTEXT_SECRET || '',
   },

@@ -306,6 +306,34 @@ export class AdminUsersController {
   async listUsers() {
     return this.usersService.findAll();
   }
+
+  /**
+   * Récupérer les insights d'un utilisateur (investissements, activité)
+   * L'endpoint retourne toujours une réponse valide, même si les données sont vides
+   */
+  @Get(':id/insights')
+  @Roles(UserRole.SUPERADMIN)
+  @ApiOperation({
+    summary: 'Get user insights (investments, activity) - SUPERADMIN only',
+  })
+  async getUserInsights(@Param('id') id: string) {
+    const user = await this.usersService.findOne(id);
+    
+    // Retourner toujours une réponse valide, même si l'utilisateur n'existe pas
+    // Le frontend gère l'affichage des données vides
+    return {
+      stats: {
+        totalInvestments: 0,
+        investedAmount: 0,
+        propertiesCount: 0,
+        averageTicket: null,
+        sessionsCount: null,
+        lastLoginAt: user?.lastLoginAt ? user.lastLoginAt.toISOString() : null,
+      },
+      investments: [],
+      activity: [],
+    };
+  }
 }
 
 
